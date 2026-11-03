@@ -1,0 +1,6 @@
+# Python 3.12+
+pandas>=2.1
+numpy>=1.26
+openpyxl>=3.1
+PuLP==3.0.2      # same version as Job-Rotation-TL (PuLP 4 changed the modelling API)
+highspy>=1.7     # HiGHS solver, free, used by PuLP through pulp.HiGHS

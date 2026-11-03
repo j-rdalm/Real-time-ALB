@@ -1,0 +1,675 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Real-time ALB</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<style>
+  :root{
+    color-scheme: light;
+    --bg:#EFF1EE;
+    --surface:#FFFFFF;
+    --surface-2:#E6E8E3;
+    --border:#D6D8D2;
+    --text-primary:#14181A;
+    --text-secondary:#565C5E;
+    --text-muted:#868C8C;
+    --accent:#2a78d6;
+    --accent-soft:#e4eefb;
+    --good:#0ca30c; --good-text:#006300; --good-soft:#e2f5e0;
+    --critical:#d03b3b; --critical-soft:#fae1e1;
+    --grid:rgba(20,24,26,0.09);
+    --shadow: 0 1px 2px rgba(20,24,26,.06), 0 8px 20px -8px rgba(20,24,26,.12);
+    --radius: 10px;
+    /* operators: categorical slots 1-6, validated in adjacent order */
+    --op1:#2a78d6; --op2:#eb6834; --op3:#1baf7a; --op4:#eda100; --op5:#e87ba4; --op6:#008300; --op7:#6250d6; --op8:#e34948;
+    /* instance type: ordinal one-hue ramp (optimistic -> pessimistic) */
+    --sc-optimistic:#6da7ec; --sc-midpoint:#2a78d6; --sc-pessimistic:#184f95;
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      color-scheme: dark;
+      --bg:#14181B; --surface:#1B2024; --surface-2:#21272B; --border:#2C333A;
+      --text-primary:#EEF0EC; --text-secondary:#AAB1B3; --text-muted:#767D80;
+      --accent:#5b9ce8; --accent-soft:#1c2c3f;
+      --good:#3fc23f; --good-text:#3fc23f; --good-soft:#132a13;
+      --critical:#e66767; --critical-soft:#3a1a1a;
+      --grid:rgba(255,255,255,0.08);
+      --shadow: 0 1px 2px rgba(0,0,0,.4), 0 8px 24px -8px rgba(0,0,0,.5);
+      --op1:#3987e5; --op2:#d95926; --op3:#199e70; --op4:#c98500; --op5:#d55181; --op6:#008300; --op7:#9085e9; --op8:#e66767;
+      --sc-optimistic:#86b6ef; --sc-midpoint:#5598e7; --sc-pessimistic:#256abf;
+    }
+  }
+  :root[data-theme="dark"]{
+    color-scheme: dark;
+    --bg:#14181B; --surface:#1B2024; --surface-2:#21272B; --border:#2C333A;
+    --text-primary:#EEF0EC; --text-secondary:#AAB1B3; --text-muted:#767D80;
+    --accent:#5b9ce8; --accent-soft:#1c2c3f;
+    --good:#3fc23f; --good-text:#3fc23f; --good-soft:#132a13;
+    --critical:#e66767; --critical-soft:#3a1a1a;
+    --grid:rgba(255,255,255,0.08);
+    --shadow: 0 1px 2px rgba(0,0,0,.4), 0 8px 24px -8px rgba(0,0,0,.5);
+    --op1:#3987e5; --op2:#d95926; --op3:#199e70; --op4:#c98500; --op5:#d55181; --op6:#008300; --op7:#9085e9; --op8:#e66767;
+    --sc-optimistic:#86b6ef; --sc-midpoint:#5598e7; --sc-pessimistic:#256abf;
+  }
+
+  *{box-sizing:border-box;}
+  html{ scroll-behavior:smooth; }
+  body{
+    margin:0; background:var(--bg); color:var(--text-primary);
+    font-family:"IBM Plex Sans", system-ui, -apple-system, sans-serif;
+  }
+  code{ overflow-wrap:anywhere; font-family:"IBM Plex Mono", ui-monospace, monospace; background:var(--surface-2); padding:1px 5px; border-radius:4px; font-size:11px; }
+  a{ color:var(--accent); }
+  .wrap{ max-width:1180px; margin:0 auto; padding: 0 20px 64px; min-width:0; }
+
+  header.top{
+    position:sticky; top:env(safe-area-inset-top,0px); z-index:20;
+    background:var(--bg); border-bottom:1px solid var(--border);
+    padding-top: calc(env(safe-area-inset-top,0px) + 18px);
+  }
+  .top-inner{ max-width:1180px; margin:0 auto; padding: 0 20px 16px; display:flex; flex-wrap:wrap; gap:16px; align-items:flex-end; justify-content:space-between;}
+  .brand{ display:flex; flex-direction:column; gap:4px; min-width:240px; }
+  .eyebrow{ font-size:11px; letter-spacing:.12em; text-transform:uppercase; color:var(--accent); font-weight:600; }
+  h1{ margin:0; font-size:26px; font-weight:700; letter-spacing:-0.01em; text-wrap:balance; }
+  .sub{ margin:0; color:var(--text-secondary); font-size:13.5px; max-width:74ch; }
+  .nav{ display:flex; gap:6px; }
+  .nav a{ font-size:12.5px; text-decoration:none; color:var(--text-secondary); padding:6px 11px; border:1px solid var(--border); border-radius:999px; background:var(--surface); }
+  .nav a:hover{ color:var(--text-primary); border-color:var(--accent); }
+
+  main > section, main > footer{ min-width:0; }
+  main{ min-width:0; padding-top:24px; display:flex; flex-direction:column; gap:32px; }
+
+  .importer{
+    display:flex; flex-wrap:wrap; gap:10px 14px; align-items:center;
+    background:var(--surface); border:1px solid var(--border); border-radius:var(--radius);
+    padding:14px 16px; box-shadow:var(--shadow);
+  }
+  .importer .status{ font-size:12.5px; color:var(--text-secondary); flex:1 1 260px; min-width:200px; }
+  .importer .actions{ display:flex; gap:8px; flex-wrap:wrap; }
+  .btn{
+    display:inline-flex; align-items:center; gap:6px; padding:8px 14px; border-radius:8px;
+    border:1px solid var(--border); background:var(--surface-2); color:var(--text-primary);
+    font-size:12.5px; font-weight:500; cursor:pointer; font-family:inherit; line-height:1.2;
+  }
+  .btn:hover{ filter:brightness(0.97); }
+  .btn.primary{ background:var(--accent); border-color:var(--accent); color:#fff; }
+  input[type="file"]{ position:absolute; width:1px; height:1px; opacity:0; overflow:hidden; }
+  .import-hint{ width:100%; margin:0; font-size:11.5px; color:var(--text-muted); line-height:1.5; }
+  .import-error{ width:100%; margin:0; font-size:12px; color:var(--critical); background:var(--critical-soft); padding:8px 10px; border-radius:8px; }
+
+  .kpi-grid{ display:grid; grid-template-columns:repeat(auto-fit,minmax(190px,1fr)); gap:12px; }
+  .kpi{
+    background:var(--surface); border:1px solid var(--border); border-radius:var(--radius);
+    padding:14px 16px; box-shadow:var(--shadow); display:flex; flex-direction:column; gap:6px; min-width:0;
+  }
+  .kpi .label{ font-size:11.5px; color:var(--text-secondary); text-transform:uppercase; letter-spacing:.06em; }
+  .kpi .value{ font-size:26px; font-weight:600; }
+  .kpi .value small{ font-size:13px; font-weight:500; color:var(--text-secondary); }
+  .kpi .foot{ font-size:11.5px; color:var(--text-muted); }
+  .kpi .foot.ok{ color:var(--good-text); font-weight:500; }
+  .kpi .foot.bad{ color:var(--critical); font-weight:500; }
+
+  section{ display:flex; flex-direction:column; gap:14px; scroll-margin-top:120px; }
+  .section-head{ display:flex; align-items:baseline; justify-content:space-between; gap:12px; flex-wrap:wrap; }
+  .section-head h2{ margin:0; font-size:16px; font-weight:600; }
+  .section-head p{ margin:0; font-size:12.5px; color:var(--text-muted); }
+
+  .chart-grid{ display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:14px; }
+  @media (max-width:860px){ .chart-grid{ grid-template-columns:1fr; } }
+  .card{
+    background:var(--surface); border:1px solid var(--border); border-radius:var(--radius);
+    padding:16px 18px 14px; box-shadow:var(--shadow); position:relative; min-width:0;
+  }
+  .card h3{ margin:0 0 2px; font-size:13.5px; font-weight:600; }
+  .card .cap{ margin:0 0 12px; font-size:11.5px; color:var(--text-muted); line-height:1.5; }
+  .card .note{ margin:10px 0 0; font-size:11.5px; color:var(--text-secondary); line-height:1.5; }
+  .card.wide{ grid-column: 1 / -1; }
+  .scroll-x{ overflow-x:auto; }
+  .scroll-x > .minw{ min-width:760px; }
+
+  svg.chart{ display:block; width:100%; height:auto; overflow:visible; }
+  svg.chart text{ font-family:"IBM Plex Mono", monospace; }
+  .axis-label{ fill:var(--text-muted); font-size:9.5px; }
+  .axis-title{ fill:var(--text-secondary); font-size:10px; font-family:"IBM Plex Sans", sans-serif !important; }
+  .grid-line{ stroke:var(--grid); stroke-width:1; }
+  .cat-label{ fill:var(--text-primary); font-size:10.5px; font-family:"IBM Plex Sans", sans-serif !important; }
+  .cat-sub{ fill:var(--text-muted); font-size:9.5px; font-family:"IBM Plex Sans", sans-serif !important; }
+  .val-label{ fill:var(--text-secondary); font-size:10px; }
+  .hit{ fill:transparent; }
+  .clickable{ cursor:pointer; }
+  .focusable:focus{ outline:none; }
+  .focusable:focus-visible{ outline:2px solid var(--accent); outline-offset:2px; }
+
+  .legend{ display:flex; flex-wrap:wrap; gap:8px 16px; margin-top:10px; }
+  .legend-item{ display:flex; align-items:center; gap:6px; font-size:11.5px; color:var(--text-secondary); }
+  .legend-item svg{ flex:none; }
+  .scale{ display:flex; align-items:center; gap:8px; margin-top:8px; font-size:11px; color:var(--text-secondary); }
+  .scale svg{ flex:none; }
+
+  .tooltip{
+    position:fixed; pointer-events:none; z-index:60; background:var(--text-primary); color:var(--bg);
+    font-size:11.5px; line-height:1.45; padding:8px 11px; border-radius:6px; box-shadow:var(--shadow);
+    max-width:290px; opacity:0; transform:translate(-50%,-100%); transition:opacity .08s ease;
+  }
+  .tooltip.show{ opacity:1; }
+  .tooltip .tt-title{ font-weight:600; margin-bottom:3px; }
+  .tooltip .tt-row{ display:flex; align-items:center; gap:7px; white-space:nowrap; }
+  .tooltip .tt-key{ width:12px; height:0; border-top:3px solid; border-radius:2px; flex:none; }
+  .tooltip .tt-val{ font-family:"IBM Plex Mono", monospace; font-weight:600; }
+  .tooltip .tt-lab{ opacity:.78; }
+  .tooltip .tt-foot{ opacity:.7; margin-top:3px; }
+
+  .filters{
+    display:flex; flex-wrap:wrap; gap:10px 22px; align-items:center;
+    background:var(--surface); border:1px solid var(--border); border-radius:var(--radius);
+    padding:12px 14px; box-shadow:var(--shadow);
+  }
+  .filter-group{ display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+  .filter-group .flabel{ font-size:11px; text-transform:uppercase; letter-spacing:.06em; color:var(--text-muted); }
+  .chip-group{ display:flex; gap:6px; flex-wrap:wrap; }
+  .chip{
+    display:flex; align-items:center; gap:6px; border:1px solid var(--border); background:var(--surface-2);
+    padding:6px 11px; border-radius:999px; font-size:12px; cursor:pointer; user-select:none; color:var(--text-secondary);
+    font-family:inherit;
+  }
+  .chip:hover{ color:var(--text-primary); }
+  .chip[aria-pressed="true"]{ background:var(--accent-soft); border-color:var(--accent); color:var(--text-primary); font-weight:500; }
+  .chip:focus-visible{ outline:2px solid var(--accent); outline-offset:2px; }
+
+  .summary{
+    display:flex; flex-wrap:wrap; gap:6px 18px; align-items:center;
+    background:var(--surface); border:1px solid var(--border); border-radius:var(--radius);
+    padding:12px 16px; box-shadow:var(--shadow); font-size:13px;
+  }
+  .summary{ min-width:0; }
+  .summary .title{ font-weight:600; }
+  .summary .stat{ color:var(--text-secondary); font-size:12.5px; }
+  .summary .stat b{ color:var(--text-primary); font-weight:600; font-family:"IBM Plex Mono", monospace; }
+  .badge{ display:inline-flex; align-items:center; gap:5px; padding:3px 9px; border-radius:999px; font-size:11px; font-weight:600; white-space:nowrap; }
+  .badge.ok{ background:var(--good-soft); color:var(--good-text); }
+  .badge.bad{ background:var(--critical-soft); color:var(--critical); }
+
+  .table-card{ background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); box-shadow:var(--shadow); overflow:hidden; }
+  .table-scroll{ overflow-x:auto; max-height:640px; overflow-y:auto; }
+  table{ border-collapse:collapse; width:100%; min-width:760px; font-size:12.8px; }
+  thead th{
+    position:sticky; top:0; background:var(--surface-2); text-align:left; padding:9px 12px;
+    font-size:11px; text-transform:uppercase; letter-spacing:.05em; color:var(--text-secondary);
+    border-bottom:1px solid var(--border); white-space:nowrap; z-index:5;
+  }
+  thead th.nocase{ text-transform:none; letter-spacing:0; }
+  thead th.sortable{ cursor:pointer; }
+  thead th.sortable:hover{ color:var(--text-primary); }
+  thead th.sorted::after{ content:attr(data-arrow); margin-left:5px; color:var(--accent); }
+  thead th.r, td.num{ text-align:right; }
+  tbody td{ padding:8px 12px; border-bottom:1px solid var(--border); vertical-align:middle; }
+  tbody tr:hover{ background:var(--surface-2); }
+  tbody tr.sel{ background:var(--accent-soft); }
+  tbody tr.clickrow{ cursor:pointer; }
+  td.num{ font-family:"IBM Plex Mono", monospace; font-variant-numeric:tabular-nums; white-space:nowrap; }
+  .opdot{ display:inline-block; width:10px; height:10px; border-radius:3px; margin-right:7px; vertical-align:-1px; }
+  .meter{ display:inline-block; width:70px; height:8px; border-radius:4px; background:var(--surface-2); vertical-align:middle; margin-right:8px; overflow:hidden; }
+  .meter span{ display:block; height:100%; border-radius:4px; }
+
+  footer{ margin-top:8px; font-size:11.5px; color:var(--text-muted); text-align:center; line-height:1.6; }
+
+  @media (max-width:520px){ h1{ font-size:21px; } }
+</style>
+<style>
+  .seg-gap{ stroke:var(--surface); stroke-width:1; }
+  .ref-line{ stroke:var(--text-secondary); stroke-width:1.2; stroke-dasharray:4 3; }
+  .break-line{ stroke:var(--text-muted); stroke-width:1; stroke-dasharray:3 3; }
+  .break-label{ fill:var(--text-muted); font-size:9.5px; font-family:"IBM Plex Sans", sans-serif !important; }
+  .hl-label{ fill:var(--text-primary); font-size:10px; font-weight:600; }
+  .cell-text{ font-size:9px; fill:#fff; font-family:"IBM Plex Mono", monospace; pointer-events:none; }
+  .moved{ fill:var(--text-primary); }
+  .range-row{ display:flex; align-items:center; gap:10px; font-size:12px; color:var(--text-secondary); margin-bottom:10px; flex-wrap:wrap; }
+  .range-row input[type=range]{ flex:1 1 160px; accent-color:var(--accent); }
+  .range-row select{ font-family:inherit; font-size:12px; padding:4px 8px; border-radius:6px; border:1px solid var(--border); background:var(--surface-2); color:var(--text-primary); }
+  .rot td{ text-align:center; }
+  .rot td.op{ text-align:left; white-space:nowrap; }
+  .loopchip{ display:inline-block; min-width:30px; padding:2px 7px; border-radius:6px; background:var(--surface-2); font-family:"IBM Plex Mono", monospace; font-size:12px; }
+  .loopchip.heavy{ background:var(--accent-soft); color:var(--text-primary); font-weight:600; }
+  .borg{ font-family:"IBM Plex Mono", monospace; }
+  .flag{ display:inline-flex; align-items:center; gap:4px; padding:1px 7px; border-radius:999px; font-size:10.5px; font-weight:600; background:var(--critical-soft); color:var(--critical); margin-left:4px; }
+  .muted{ color:var(--text-muted); }
+  .explain{ font-size:12.5px; color:var(--text-secondary); line-height:1.6; margin:0; max-width:95ch; }
+  .explain b{ color:var(--text-primary); }
+  .compare-row{ display:grid; grid-template-columns:120px 1fr 64px; gap:10px; align-items:center; font-size:12px; margin:8px 0; }
+  .compare-row .nm{ color:var(--text-secondary); }
+  .compare-row .v{ font-family:"IBM Plex Mono", monospace; text-align:right; }
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="top-inner">
+    <div class="brand">
+      <div class="eyebrow">Real-time ALB &middot; Chapter 5</div>
+      <h1>Real-time ergonomic balancing and rotation</h1>
+      <p class="sub">Task exposure, the plan for each headcount and one simulated shift on the industrial line (92 tasks, 20 workstations). Data generated by <code>python -m experiments.build_dashboard</code>.</p>
+    </div>
+    <nav class="nav" aria-label="Sections">
+      <a href="#tasks">Task exposure</a><a href="#plans">Plans</a><a href="#shift">Shift</a>
+    </nav>
+  </div>
+</header>
+<div class="wrap">
+<main>
+
+<!-- ============================================================ TASKS -->
+<section id="tasks">
+  <div class="section-head"><h2>Task exposure</h2><p>Sec. 5.7.3</p></div>
+  <p class="explain">Exposure of one execution is <b>intensity &times; time</b>: <code>I = wE&middot;rate/refE + wR&middot;max(0, REBA&minus;1)/(refR&minus;1) + wB&middot;max(0, Borg&minus;2)/(refB&minus;2)</code>, <code>x = I&middot;t</code> (exposure-minutes). The Ch.&nbsp;4 ERI counts each task once per cycle, whatever its duration.</p>
+  <div class="kpi-grid" id="taskKpis"></div>
+  <div class="filters">
+    <div class="filter-group"><span class="flabel">Measure</span><div class="chip-group" id="measureChips" role="group" aria-label="Measure"></div></div>
+    <div class="filter-group"><span class="flabel">Order</span><div class="chip-group" id="orderChips" role="group" aria-label="Order"></div></div>
+  </div>
+  <div class="chart-grid">
+    <div class="card wide">
+      <h3 id="taskBarTitle">Exposure per execution</h3>
+      <p class="cap" id="taskBarCap"></p>
+      <div class="scroll-x"><div class="minw" id="chartTasks"></div></div>
+      <div class="legend" id="taskLegend"></div>
+    </div>
+    <div class="card">
+      <h3>Rank by Ch.&nbsp;4 ERI vs rank by the selected measure</h3>
+      <p class="cap">One dot per task (1 = heaviest). Dots below the dashed line rank lower (lighter) than with the ERI, dots above rank higher. Short tasks drop; long tasks with real risk rise.</p>
+      <div id="chartRank"></div>
+    </div>
+    <div class="card">
+      <h3>Splitting a task into equal parts</h3>
+      <p class="cap">Total load of the task if its MTM operations were grouped into <i>k</i> equal tasks. The ERI sum grows with <i>k</i> (REBA and Borg are counted once per part); the exposure does not.</p>
+      <div class="range-row">
+        <label for="splitTask">Task</label><select id="splitTask"></select>
+        <label for="splitK">k = <b id="splitKv">10</b></label><input type="range" id="splitK" min="1" max="10" value="10">
+      </div>
+      <div id="chartSplit"></div>
+      <div class="legend" id="splitLegend"></div>
+    </div>
+  </div>
+  <div class="table-card">
+    <div class="table-scroll">
+      <table id="taskTable"><thead><tr></tr></thead><tbody></tbody></table>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ PLANS -->
+<section id="plans">
+  <div class="section-head"><h2>Plans by headcount</h2><p>Sec. 5.7.4 &middot; MILP of Sec. 4.4, w<sub>t</sub> = w<sub>e</sub> = 0.5, time-weighted exposure</p></div>
+  <div class="filters">
+    <div class="filter-group"><span class="flabel">Operators</span><div class="chip-group" id="planMChips" role="group" aria-label="Headcount"></div></div>
+    <div class="filter-group"><span class="flabel">Task values</span><div class="chip-group" id="planDataChips" role="group" aria-label="Task values"></div></div>
+  </div>
+  <div class="summary" id="planSummary"></div>
+  <div class="chart-grid">
+    <div class="card wide">
+      <h3>Line layout</h3>
+      <p class="cap" id="layoutCap">One row per loop; each cell is a task in line order, with the workstation on top.</p>
+      <div class="scroll-x"><div class="minw" id="chartLayout"></div></div>
+    </div>
+    <div class="card">
+      <h3>Work content per loop</h3>
+      <p class="cap">Task time of one cycle (s). The dashed line is the cycle time, set by the slowest loop; the gap is idle time.</p>
+      <div id="chartLoopTime"></div>
+    </div>
+    <div class="card">
+      <h3>Exposure per loop</h3>
+      <p class="cap">Exposure-minutes per hour of work on the loop. Same scale for every headcount. Rotation spreads these differences among operators.</p>
+      <div id="chartLoopExp"></div>
+    </div>
+  </div>
+  <div class="table-card">
+    <div class="table-scroll">
+      <table id="planTable"><thead><tr><th>Loop</th><th>Workstations</th><th class="r">Tasks</th><th class="r">Time (s)</th><th class="r">Idle (s)</th><th class="r">Exposure / cycle</th><th class="r">Exposure / h</th></tr></thead><tbody></tbody></table>
+    </div>
+  </div>
+  <div class="table-card">
+    <div class="table-scroll">
+      <table id="libTable"><thead><tr><th>Plan library</th><th class="r">Cycle time (s)</th><th class="r">Units / h</th><th class="r">Units / operator-hour</th><th class="r">Line efficiency</th><th class="r">Loop exposure / h (min&ndash;max)</th><th class="r">Tasks moved vs initial</th></tr></thead><tbody></tbody></table>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ SHIFT -->
+<section id="shift">
+  <div class="section-head"><h2>Simulated shift</h2><p>Sec. 5.7.5 &amp; 5.8 &middot; one example shift (3 blocks of 2 h 30 min)</p></div>
+  <p class="explain">Main scenario: the true REBA of tasks 20, 38 and 44 is higher than the observed value. <b>No rotation</b>: each operator stays on one loop. <b>Offline rotation</b>: rotation at the breaks with the initial values. <b>Real-time</b>: estimates updated every cycle (after 5 warm-up shifts), rotation with the measured exposure and the Borg rule (Borg &ge; 7 &rArr; not to the heaviest loop). The same operators and noise are used for the three policies of a headcount; this is one shift; the last chart adds the means over 10 seeds.</p>
+  <div class="filters">
+    <div class="filter-group"><span class="flabel">Operators</span><div class="chip-group" id="shiftMChips" role="group" aria-label="Headcount"></div></div>
+    <div class="filter-group"><span class="flabel">Policy</span><div class="chip-group" id="policyChips" role="group" aria-label="Policy"></div></div>
+    <div class="filter-group"><span class="flabel">View</span><div class="chip-group" id="viewChips" role="group" aria-label="View"></div></div>
+  </div>
+  <div class="summary" id="shiftSummary"></div>
+  <div class="chart-grid">
+    <div class="card wide">
+      <h3 id="cumTitle">Cumulative exposure per operator</h3>
+      <p class="cap" id="cumCap"></p>
+      <div id="chartCum"></div>
+      <div class="legend" id="cumLegend"></div>
+    </div>
+    <div class="card wide">
+      <h3>Rotation at the breaks</h3>
+      <p class="cap">Loop of each operator in each block (highlighted: the heaviest loop of the block, by forecast exposure), the Borg rating given at the end of the block, and the exposure accumulated by the end of the shift.</p>
+      <div class="table-scroll" style="max-height:none"><table class="rot" id="rotTable"><thead></thead><tbody></tbody></table></div>
+      <p class="note" id="rotNote"></p>
+    </div>
+    <div class="card wide">
+      <h3>Exposure gap between operators, by policy</h3>
+      <p class="cap">Most minus least exposed operator, exposure-minutes per hour. Bar: this shift. Tick and number on the right: mean over 10 seeds of 20 shifts (Sec. 5.8.2).</p>
+      <div id="policyCompare"></div>
+    </div>
+  </div>
+</section>
+
+<footer>Simulated data. Code: Real time ALB repository (<code>realtime_alb</code>, <code>experiments/build_dashboard.py</code>).</footer>
+</main>
+</div>
+<div class="tooltip" id="tt" role="tooltip"></div>
+
+<script>
+const DATA = /*__DATA__*/null;
+(function(){
+"use strict";
+const NS = "http://www.w3.org/2000/svg";
+const $ = id => document.getElementById(id);
+const fmt = (v, d=2) => Number(v).toLocaleString("en-US", {minimumFractionDigits:d, maximumFractionDigits:d});
+const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const opColor = k => `var(--op${((k-1)%8)+1})`;
+const opIdx = o => parseInt(o.slice(1), 10);
+function el(tag, attrs={}, parent){ const e=document.createElementNS(NS, tag); for(const k in attrs) e.setAttribute(k, attrs[k]); if(parent) parent.appendChild(e); return e; }
+function svg(container, w, h){ container.innerHTML=""; const s=el("svg",{class:"chart", viewBox:`0 0 ${w} ${h}`, width:w, height:h, role:"img"}); container.appendChild(s); return s; }
+function txt(p, x, y, s, cls, anchor="start", extra={}){ const t=el("text",{x, y, class:cls, "text-anchor":anchor, ...extra}, p); t.textContent=s; return t; }
+function widthOf(c, min=320){ return Math.max(min, Math.floor(c.getBoundingClientRect().width || c.parentElement.getBoundingClientRect().width)); }
+function niceMax(v){ const p=Math.pow(10, Math.floor(Math.log10(v||1))); const n=v/p; return (n<=1?1:n<=2?2:n<=2.5?2.5:n<=5?5:10)*p; }
+function tdec(max, n=4){ const st=max/n; return st>=1&&Number.isInteger(st)?0:Number.isInteger(Math.round(st*1e6)/1e5)?1:2; }
+function ticks(max, n=4){ const out=[]; for(let i=0;i<=n;i++) out.push(max*i/n); return out; }
+// rounded-top bar path (4px data end), anchored at the baseline
+function barPath(x, y, w, h, r=4, horiz=false){
+  if(h<=0||w<=0) return "";
+  if(!horiz){ r=Math.min(r, w/2, h); return `M${x},${y+h}V${y+r}Q${x},${y} ${x+r},${y}H${x+w-r}Q${x+w},${y} ${x+w},${y+r}V${y+h}Z`; }
+  r=Math.min(r, h/2, w); return `M${x},${y}H${x+w-r}Q${x+w},${y} ${x+w},${y+r}V${y+h-r}Q${x+w},${y+h} ${x+w-r},${y+h}H${x}Z`;
+}
+// ---------- tooltip
+const tt = $("tt");
+function showTT(ev, html){ tt.innerHTML=html; tt.classList.add("show"); moveTT(ev); }
+function moveTT(ev){ const pad=12; let x=ev.clientX, y=ev.clientY-pad; const r=tt.getBoundingClientRect(); x=Math.min(Math.max(x, r.width/2+8), innerWidth-r.width/2-8); if(y-r.height<8) y=ev.clientY+r.height+pad+8; tt.style.left=x+"px"; tt.style.top=y+"px"; }
+function hideTT(){ tt.classList.remove("show"); }
+function hover(node, fn){ node.addEventListener("mouseenter", e=>showTT(e, fn())); node.addEventListener("mousemove", moveTT); node.addEventListener("mouseleave", hideTT); node.addEventListener("focus", e=>{ const b=node.getBoundingClientRect(); showTT({clientX:b.x+b.width/2, clientY:b.y}, fn()); }); node.addEventListener("blur", hideTT); }
+const row = (color, lab, val) => `<div class="tt-row">${color?`<span class="tt-key" style="border-color:${color}"></span>`:""}<span class="tt-lab">${lab}</span><span class="tt-val">${val}</span></div>`;
+// ---------- chips
+function chips(container, options, state, key, onChange){
+  const c=$(container); c.innerHTML="";
+  options.forEach(([val, label])=>{
+    const b=document.createElement("button"); b.type="button"; b.className="chip"; b.textContent=label;
+    b.setAttribute("aria-pressed", String(state[key]===val));
+    b.addEventListener("click", ()=>{ state[key]=val; [...c.children].forEach((x,i)=>x.setAttribute("aria-pressed", String(options[i][0]===val))); onChange(); });
+    c.appendChild(b);
+  });
+}
+function legend(container, items){ const c=$(container); c.innerHTML=""; items.forEach(([color, label, dash])=>{ const d=document.createElement("div"); d.className="legend-item"; d.innerHTML=`<svg width="14" height="10">${dash?`<line x1="0" y1="5" x2="14" y2="5" stroke="${color}" stroke-width="2" stroke-dasharray="3 2"/>`:`<rect width="14" height="10" rx="3" fill="${color}"/>`}</svg>${label}`; c.appendChild(d); }); }
+
+if(!DATA){ document.querySelector("main").innerHTML="<p>No data: run <code>python -m experiments.build_dashboard</code>.</p>"; return; }
+const T = DATA.tasks, R = DATA.refs, W = R.weights;
+const byId = Object.fromEntries(T.map(t=>[t.id, t]));
+const HIDDEN = Object.keys(DATA.hidden).map(Number);
+const lineOrder = [...T].sort((a,b)=>a.ws-b.ws || a.id-b.id).map(t=>t.id);
+
+// ============================================================ TASKS
+const COMP = [["energy","Energy","var(--op1)"],["reba","REBA","var(--op2)"],["borg","Borg CR-10","var(--op3)"]];
+function feriComp(t){ return {energy: W.energy*t.energy/R.energy, reba: W.reba*t.reba/R.reba, borg: W.borg*t.borg/R.borg}; }
+const MEAS = {
+  exposure: {label:"Exposure (with thresholds)", unit:"exposure-min", val:t=>t.exposure, comp:t=>t.comp, rank:t=>t.rank_exposure,
+             cap:"Stacked by component. Only REBA above 1 and Borg above 2 count; energy enters as a rate times the duration."},
+  nothr:    {label:"Exposure (no thresholds)", unit:"exposure-min", val:t=>t.exposure_nothr, comp:t=>t.comp_nothr, rank:t=>t.rank_exposure_nothr,
+             cap:"Same as the exposure but counting REBA and Borg from 0: long tasks with negligible risk accumulate exposure from their duration alone."},
+  feri:     {label:"Ch. 4 ERI (FERI)", unit:"ERI", val:t=>t.feri, comp:feriComp, rank:t=>t.rank_feri,
+             cap:"ERI of Sec. 4.4 with the modal values: one value per task, counted once per cycle whatever the duration."},
+};
+const tstate = {measure:"exposure", order:"rank", sortKey:"rank_exposure", sortDir:1};
+
+function taskKpis(){
+  const m = MEAS[tstate.measure];
+  const top = [...T].sort((a,b)=>m.rank(a)-m.rank(b)).slice(0,4).map(t=>t.id).join(", ");
+  const t38=byId[38];
+  $("taskKpis").innerHTML = [
+    ["Heaviest tasks", top, m.label],
+    ["Task 38 (63 s, REBA 1)", `#${t38.rank_exposure_nothr} &rarr; #${t38.rank_exposure}`, "rank without &rarr; with thresholds"],
+    ["Task 44 split in 10", `${fmt(t44split(10).feri,2)} <small>vs ${fmt(byId[44].feri,2)}</small>`, "ERI sum; the exposure stays the same"],
+    ["References", `${R.reba} / ${R.borg} <small>REBA / Borg</small>`, `max + 1; energy ${fmt(R.energy_rate,2)} kcal/min`],
+  ].map(([l,v,f])=>`<div class="kpi"><span class="label">${l}</span><span class="value">${v}</span><span class="foot">${f}</span></div>`).join("");
+}
+function t44split(k, id=44){ const t=byId[id]; const c=feriComp(t); return {feri: c.energy + k*(c.reba+c.borg), exposure: t.exposure}; }
+
+function drawTaskBars(){
+  const m=MEAS[tstate.measure], c=$("chartTasks");
+  $("taskBarTitle").textContent = (tstate.measure==="feri"?"ERI per task":"Exposure per execution") + " — " + m.label;
+  $("taskBarCap").textContent = m.cap + " Hover a bar for the values; tasks 20, 38 and 44 (hidden REBA errors in the simulation) are labelled.";
+  const ids = tstate.order==="rank" ? [...T].sort((a,b)=>m.rank(a)-m.rank(b)).map(t=>t.id) : lineOrder;
+  const W_=Math.max(760, widthOf(c)), H=280, ml=44, mr=8, mt=18, mb=34;
+  const s=svg(c, W_, H); const iw=W_-ml-mr, ih=H-mt-mb;
+  const max=niceMax(Math.max(...T.map(m.val))*1.05);
+  ticks(max).forEach(v=>{ const y=mt+ih-ih*v/max; el("line",{x1:ml,x2:W_-mr,y1:y,y2:y,class:"grid-line"},s); txt(s, ml-6, y+3, fmt(v, tdec(max)), "axis-label", "end"); });
+  txt(s, ml, 10, m.unit, "axis-title");
+  const bw=iw/ids.length, gap=Math.min(2, bw*0.25);
+  ids.forEach((id,k)=>{
+    const t=byId[id], comp=m.comp(t); let y0=mt+ih; const x=ml+k*bw+gap/2, w=bw-gap;
+    const g=el("g",{tabindex:"0", class:"focusable"},s);
+    const parts=COMP.filter(([key])=>comp[key]>0);
+    parts.forEach(([key,,color],j)=>{
+      const h=ih*comp[key]/max; y0-=h;
+      if(j===parts.length-1) el("path",{d:barPath(x,y0,w,h,Math.min(4,w/2)), fill:color},g);
+      else el("rect",{x, y:y0, width:w, height:Math.max(0,h-(h>2?1:0)), fill:color},g);
+    });
+    el("rect",{x:ml+k*bw, y:mt, width:bw, height:ih, class:"hit"},g);
+    if(HIDDEN.includes(id)) txt(s, x+w/2, y0-4, String(id), "hl-label", "middle");
+    if(tstate.order==="line" && (k===0 || byId[ids[k-1]].ws!==t.ws)){ txt(s, x, H-mb+14, "W"+t.ws, "axis-label"); }
+    hover(g, ()=>`<div class="tt-title">Task ${id} · workstation ${t.ws}</div>`+
+      row(null,"Time", fmt(t.time,1)+" s")+row(null,"Energy", fmt(t.rate,2)+" kcal/min")+row(null,"REBA / Borg", `${t.reba} / ${t.borg}`)+
+      COMP.map(([key,lab,color])=>row(color, lab, fmt(comp[key],3))).join("")+
+      row(null, m.label, fmt(m.val(t),3))+`<div class="tt-foot">Rank ${m.rank(t)} of ${T.length}</div>`);
+  });
+  txt(s, ml+iw/2, H-4, tstate.order==="rank" ? "tasks, heaviest first" : "tasks in line order (workstation labels)", "axis-title", "middle");
+  legend("taskLegend", COMP.map(([,lab,color])=>[color, lab]));
+}
+function drawRank(){
+  const m=MEAS[tstate.measure], c=$("chartRank");
+  const W_=widthOf(c), H=Math.min(340, W_), ml=40, mr=12, mt=12, mb=36, n=T.length;
+  const s=svg(c, W_, H), iw=W_-ml-mr, ih=H-mt-mb;
+  const X=r=>ml+iw*(r-1)/(n-1), Y=r=>mt+ih*(r-1)/(n-1);
+  [1,20,40,60,80,92].forEach(r=>{ el("line",{x1:ml,x2:ml+iw,y1:Y(r),y2:Y(r),class:"grid-line"},s); txt(s, ml-6, Y(r)+3, r, "axis-label","end"); txt(s, X(r), H-mb+14, r, "axis-label","middle"); });
+  el("line",{x1:X(1),y1:Y(1),x2:X(n),y2:Y(n),class:"ref-line"},s);
+  txt(s, ml+iw/2, H-4, "rank by Ch. 4 ERI", "axis-title","middle");
+  txt(s, 12, mt+ih/2, "rank by "+(tstate.measure==="feri"?"ERI":"exposure"), "axis-title","middle",{transform:`rotate(-90 12 ${mt+ih/2})`});
+  T.forEach(t=>{
+    const g=el("g",{tabindex:"0",class:"focusable"},s), cx=X(t.rank_feri), cy=Y(m.rank(t)), hl=HIDDEN.includes(t.id);
+    el("circle",{cx, cy, r:hl?5:4, fill:"var(--op1)", stroke:"var(--surface)", "stroke-width":2},g);
+    el("circle",{cx, cy, r:9, class:"hit"},g);
+    if(hl) txt(s, cx+7, cy+3, String(t.id), "hl-label");
+    hover(g, ()=>`<div class="tt-title">Task ${t.id} · ${fmt(t.time,1)} s</div>`+row(null,"Rank ERI", t.rank_feri)+row(null,"Rank "+m.label, m.rank(t)));
+  });
+}
+function drawSplit(){
+  const id=+$("splitTask").value, kSel=+$("splitK").value; $("splitKv").textContent=kSel;
+  const c=$("chartSplit"), W_=widthOf(c), H=220, ml=44, mr=70, mt=14, mb=34;
+  const s=svg(c, W_, H), iw=W_-ml-mr, ih=H-mt-mb;
+  const ks=[1,2,3,4,5,6,7,8,9,10], fe=ks.map(k=>t44split(k,id).feri), t=byId[id];
+  // exposure and ERI are different units: plot both as a multiple of their own value at k = 1
+  const fe1=fe.map(v=>v/fe[0]), ex1=ks.map(()=>1);
+  const max=niceMax(Math.max(...fe1)*1.05);
+  const X=k=>ml+iw*(k-1)/9, Y=v=>mt+ih-ih*v/max;
+  ticks(max).forEach(v=>{ el("line",{x1:ml,x2:ml+iw,y1:Y(v),y2:Y(v),class:"grid-line"},s); txt(s, ml-6, Y(v)+3, "×"+fmt(v,1), "axis-label","end"); });
+  ks.forEach(k=>txt(s, X(k), H-mb+14, k, "axis-label","middle"));
+  txt(s, ml+iw/2, H-4, "number of parts k", "axis-title","middle");
+  [[fe1,"var(--op2)","ERI sum"],[ex1,"var(--op1)","Exposure"]].forEach(([vals,color,lab])=>{
+    el("path",{d:vals.map((v,i)=>(i?"L":"M")+X(ks[i])+","+Y(v)).join(""), fill:"none", stroke:color, "stroke-width":2},s);
+    const v=vals[kSel-1]; el("circle",{cx:X(kSel), cy:Y(v), r:5, fill:color, stroke:"var(--surface)","stroke-width":2},s);
+    txt(s, X(10)+8, Y(vals[9])+(lab==="Exposure"?12:3), lab, "val-label");
+  });
+  el("line",{x1:X(kSel),x2:X(kSel),y1:mt,y2:mt+ih,class:"break-line"},s);
+  const hit=el("rect",{x:ml,y:mt,width:iw,height:ih,class:"hit"},s);
+  hover(hit, ()=>`<div class="tt-title">Task ${id} in ${kSel} part${kSel>1?"s":""}</div>`+row("var(--op2)","ERI sum", fmt(fe[kSel-1],3)+` (×${fmt(fe1[kSel-1],2)})`)+row("var(--op1)","Exposure", fmt(t.exposure,3)+" (×1.00)"));
+  legend("splitLegend", [["var(--op2)","ERI sum (relative to k = 1)"],["var(--op1)","Exposure (relative to k = 1)"]]);
+}
+const TCOLS = [["id","Task",0],["ws","WS",0],["time","Time (s)",1],["rate","kcal/min",2],["reba","REBA",0],["borg","Borg",0],["feri","ERI",3],["exposure","Exposure",3],["exposure_nothr","Exp. no thr.",3],["rank_feri","Rank ERI",0],["rank_exposure","Rank exp.",0],["rank_exposure_nothr","Rank no thr.",0]];
+function drawTaskTable(){
+  const head=$("taskTable").tHead.rows[0]; head.innerHTML="";
+  TCOLS.forEach(([k,lab])=>{ const th=document.createElement("th"); th.textContent=lab; th.className="sortable"+(k==="id"||k==="ws"?"":" r")+(tstate.sortKey===k?" sorted":""); th.dataset.arrow=tstate.sortDir>0?"▲":"▼"; th.onclick=()=>{ tstate.sortDir = tstate.sortKey===k ? -tstate.sortDir : 1; tstate.sortKey=k; drawTaskTable(); }; head.appendChild(th); });
+  const rows=[...T].sort((a,b)=>(a[tstate.sortKey]-b[tstate.sortKey])*tstate.sortDir);
+  $("taskTable").tBodies[0].innerHTML=rows.map(t=>"<tr>"+TCOLS.map(([k,,d])=>{
+    let v = d? fmt(t[k],d) : t[k];
+    if(k==="reba" && t.true_reba!==t.reba) v=`${t.reba} <span class="muted">(true ${t.true_reba})</span>`;
+    return `<td class="${k==="id"||k==="ws"?"":"num"}">${v}</td>`; }).join("")+"</tr>").join("");
+}
+function renderTasks(){ taskKpis(); drawTaskBars(); drawRank(); }
+chips("measureChips", Object.entries(MEAS).map(([k,v])=>[k,v.label]), tstate, "measure", renderTasks);
+chips("orderChips", [["rank","Heaviest first"],["line","Line order"]], tstate, "order", drawTaskBars);
+$("splitTask").innerHTML=[...T].sort((a,b)=>b.time-a.time).slice(0,12).map(t=>`<option value="${t.id}" ${t.id===44?"selected":""}>Task ${t.id} (${fmt(t.time,1)} s)</option>`).join("");
+$("splitTask").onchange=drawSplit; $("splitK").oninput=drawSplit;
+
+// ============================================================ PLANS
+const pstate={m:6, data:"initial"};
+const MS=[4,5,6,7];
+const plan = (d,m)=>DATA.plans[`${d}_${m}`];
+const loopOf = p => { const o={}; p.loops.forEach(l=>l.tasks.forEach(i=>o[i]=l.loop)); return o; };
+const maxExpH = Math.max(...Object.values(DATA.plans).flatMap(p=>p.loops.map(l=>l.exposure_h)));
+function renderPlans(){
+  const p=plan(pstate.data,pstate.m), base=loopOf(plan("initial",pstate.m)), cur=loopOf(p);
+  const moved=Object.keys(cur).filter(i=>cur[i]!==base[i]).map(Number);
+  const eh=p.loops.map(l=>l.exposure_h);
+  $("planSummary").innerHTML=`<span class="title">${pstate.m} operators · ${pstate.data==="initial"?"initial values":"true values"}</span>`+
+    `<span class="stat">Cycle time <b>${fmt(p.ct_s,1)} s</b></span><span class="stat">Units/h <b>${fmt(3600/p.ct_s,2)}</b></span>`+
+    `<span class="stat">Line efficiency <b>${fmt(p.efficiency,3)}</b></span><span class="stat">Loop exposure/h <b>${fmt(Math.min(...eh),1)}–${fmt(Math.max(...eh),1)}</b></span>`+
+    `<span class="stat">Objective <b>${fmt(p.objective,4)}</b></span>`+(pstate.data==="true"?`<span class="badge ${moved.length?"bad":"ok"}">${moved.length} task${moved.length===1?"":"s"} in another loop</span>`:"");
+  $("layoutCap").textContent = "One row per loop; each cell is a task in line order (workstation on top). Colour = loop." + (pstate.data==="true" ? " A dot marks a task placed in another loop than with the initial values (the hidden REBA errors of tasks 20, 38 and 44 corrected)." : "");
+  // layout
+  const c=$("chartLayout"), W_=Math.max(760, widthOf(c)), rowH=24, mt=26, ml=40, mr=8, n=lineOrder.length;
+  const H=mt+p.loops.length*rowH+8, s=svg(c, W_, H), cw=(W_-ml-mr)/n;
+  lineOrder.forEach((id,k)=>{ const t=byId[id]; if(k===0||byId[lineOrder[k-1]].ws!==t.ws){ const x=ml+k*cw; el("line",{x1:x,x2:x,y1:mt-12,y2:H-6,class:"grid-line"},s); txt(s, x+2, mt-6, t.ws, "axis-label"); } });
+  txt(s, ml-4, mt-6, "WS", "axis-label","end");
+  p.loops.forEach((l,r)=>{
+    const y=mt+r*rowH; txt(s, ml-6, y+rowH/2+3, "L"+l.loop, "cat-label","end");
+    l.tasks.forEach(id=>{ const k=lineOrder.indexOf(id), x=ml+k*cw;
+      const g=el("g",{tabindex:"0",class:"focusable"},s);
+      el("rect",{x:x+1, y:y+2, width:Math.max(1,cw-2), height:rowH-4, rx:3, fill:opColor(l.loop)},g);
+      if(moved.includes(id)) el("circle",{cx:x+cw/2, cy:y+rowH/2, r:Math.min(3, cw/3), fill:"var(--surface)"},g);
+      el("rect",{x, y, width:cw, height:rowH, class:"hit"},g);
+      const t=byId[id];
+      hover(g, ()=>`<div class="tt-title">Task ${id} · loop L${l.loop}</div>`+row(null,"Workstation", t.ws)+row(null,"Time", fmt(t.time,1)+" s")+row(null,"REBA", pstate.data==="true"?t.true_reba:t.reba)+(moved.includes(id)?`<div class="tt-foot">With the initial values: L${base[id]}</div>`:""));
+    });
+  });
+  hbars("chartLoopTime", p.loops.map(l=>[l.loop, l.time_s]), Math.ceil(Math.max(...MS.map(m=>plan(pstate.data,m).ct_s))*1.02/200)*200, "s", p.ct_s, "cycle time", 1);
+  hbars("chartLoopExp", p.loops.map(l=>[l.loop, l.exposure_h]), niceMax(maxExpH*1.05), "exposure-min / h", null, null, 1);
+  $("planTable").tBodies[0].innerHTML=p.loops.map(l=>`<tr><td><span class="opdot" style="background:${opColor(l.loop)}"></span>L${l.loop}</td><td>${l.ws.join(", ")}</td><td class="num">${l.tasks.length}</td><td class="num">${fmt(l.time_s,1)}</td><td class="num">${fmt(p.ct_s-l.time_s,1)}</td><td class="num">${fmt(l.exposure_cycle,3)}</td><td class="num">${fmt(l.exposure_h,2)}</td></tr>`).join("");
+  $("libTable").tBodies[0].innerHTML=MS.map(m=>{ const q=plan(pstate.data,m), b=loopOf(plan("initial",m)), cu=loopOf(q), mv=Object.keys(cu).filter(i=>cu[i]!==b[i]).length, e=q.loops.map(l=>l.exposure_h);
+    return `<tr class="${m===pstate.m?"sel":""}"><td>${m} operators</td><td class="num">${fmt(q.ct_s,1)}</td><td class="num">${fmt(3600/q.ct_s,2)}</td><td class="num">${fmt(3600/q.ct_s/m,2)}</td><td class="num">${fmt(q.efficiency,3)}</td><td class="num">${fmt(Math.min(...e),1)}–${fmt(Math.max(...e),1)}</td><td class="num">${pstate.data==="true"?mv:"—"}</td></tr>`; }).join("");
+}
+function hbars(cid, items, max, unit, refV, refLab, dec){
+  const c=$(cid), W_=widthOf(c), bh=18, gap=8, ml=34, mr=50, mt=8, mb=26;
+  const H=mt+items.length*(bh+gap)+mb, s=svg(c, W_, H), iw=W_-ml-mr;
+  const X=v=>ml+iw*v/max;
+  ticks(max).forEach(v=>{ el("line",{x1:X(v),x2:X(v),y1:mt,y2:H-mb,class:"grid-line"},s); txt(s, X(v), H-mb+12, fmt(v, tdec(max)), "axis-label","middle"); });
+  txt(s, ml+iw/2, H-2, unit, "axis-title","middle");
+  items.forEach(([k,v],i)=>{ const y=mt+i*(bh+gap), g=el("g",{tabindex:"0",class:"focusable"},s);
+    txt(s, ml-6, y+bh/2+3, "L"+k, "cat-label","end");
+    el("path",{d:barPath(ml, y, X(v)-ml, bh, 4, true), fill:opColor(k)},g);
+    txt(s, X(v)+5, y+bh/2+3, fmt(v,dec), "val-label");
+    el("rect",{x:ml,y,width:iw,height:bh,class:"hit"},g);
+    hover(g, ()=>`<div class="tt-title">Loop L${k}</div>`+row(opColor(k), unit, fmt(v,2))+(refV?row(null, "Idle", fmt(refV-v,1)+" s"):""));
+  });
+  if(refV){ el("line",{x1:X(refV),x2:X(refV),y1:mt-4,y2:H-mb,class:"ref-line"},s); txt(s, X(refV), mt-0, "", "val-label"); }
+}
+chips("planMChips", MS.map(m=>[m,String(m)]), pstate, "m", renderPlans);
+chips("planDataChips", [["initial","Initial values"],["true","True values (errors corrected)"]], pstate, "data", renderPlans);
+
+// ============================================================ SHIFT
+const sstate={m:6, policy:"realtime", view:"diff"};
+const POL=[["static","No rotation"],["rotation","Offline rotation"],["realtime","Real-time"]];
+const polName=Object.fromEntries(POL);
+function renderShift(){
+  const sh=DATA.shifts[`${sstate.policy}_${sstate.m}`], ops=sh.operators, k=sh.kpi;
+  const seed=(DATA.seed_summary||[]).find(r=>r.policy===sstate.policy && r.m===sstate.m);
+  $("shiftSummary").innerHTML=`<span class="title">${polName[sstate.policy]} · ${sstate.m} operators</span>`+
+    `<span class="stat">Exposure gap <b>${fmt(k.exposure_range,2)}</b>/h</span><span class="stat">Gini <b>${fmt(k.exposure_gini,3)}</b></span>`+
+    `<span class="stat">Most exposed <b>${fmt(k.exposure_per_h_max,2)}</b>/h</span><span class="stat">Min/h at REBA ≥ 4 (most exposed) <b>${fmt(k.reba4_min_per_h_max,1)}</b></span>`+
+    `<span class="stat">Units/h <b>${fmt(k.units_per_hour,1)}</b></span>`+(seed?`<span class="stat muted">10-seed mean gap <b>${fmt(seed.exposure_range_mean,2)}</b></span>`:"");
+  // cumulative chart
+  const c=$("chartCum"), W_=widthOf(c), H=300, ml=44, mr=56, mt=22, mb=34;
+  const s=svg(c, W_, H), iw=W_-ml-mr, ih=H-mt-mb, total=DATA.blocks_min.reduce((a,b)=>a+b,0);
+  const diff=sstate.view==="diff";
+  $("cumTitle").textContent = diff ? "Cumulative exposure per operator, relative to the mean" : "Cumulative exposure per operator";
+  $("cumCap").textContent = (diff ? "Each operator's measured exposure since the start of the shift minus the mean of the operators at that moment (exposure-minutes); the spread at the end is the gap of the shift. " : "Measured exposure-minutes since the start of the shift. ") + "Dashed lines are the breaks, where operators rotate and rate the past block on the Borg CR-10 scale.";
+  const val = c => diff ? (()=>{ const mu=c.cum.reduce((a,b)=>a+b,0)/c.cum.length; return c.cum.map(v=>v-mu); })() : c.cum;
+  const same=Object.values(DATA.shifts).filter(x=>x.m===sstate.m);
+  let lo=0, hi=0; same.forEach(x=>x.cycles.forEach(c=>val(c).forEach(v=>{ lo=Math.min(lo,v); hi=Math.max(hi,v); })));
+  let max, min;
+  if(diff){ const a=niceMax(Math.max(-lo,hi)*1.05); max=a; min=-a; } else { max=niceMax(hi*1.05); min=0; }
+  const X=t=>ml+iw*t/total, Y=v=>mt+ih-ih*(v-min)/(max-min);
+  const tv = diff ? [min, min/2, 0, max/2, max] : ticks(max);
+  tv.forEach(v=>{ el("line",{x1:ml,x2:ml+iw,y1:Y(v),y2:Y(v),class:v===0&&diff?"ref-line":"grid-line"},s); txt(s, ml-6, Y(v)+3, (diff&&v>0?"+":"")+fmt(v, Math.abs(max)<10?1:0), "axis-label","end"); });
+  [0,60,120,180,240,300,360,420].forEach(t=>txt(s, X(t), H-mb+14, (t/60)+" h", "axis-label","middle"));
+  txt(s, ml, 12, diff?"exposure-min vs mean":"exposure-min", "axis-title"); txt(s, ml+iw/2, H-4, "time in shift", "axis-title","middle");
+  let acc=0; DATA.blocks_min.slice(0,-1).forEach((b,i)=>{ acc+=b; el("line",{x1:X(acc),x2:X(acc),y1:mt-6,y2:mt+ih,class:"break-line"},s); txt(s, X(acc)+4, mt-8+8, "break "+(i+1), "break-label"); });
+  const pts=sh.cycles, V=pts.map(val);
+  ops.forEach((o,j)=>{ const color=opColor(opIdx(o));
+    const d="M"+X(0)+","+Y(0)+pts.map((p,i)=>"L"+X(p.t)+","+Y(V[i][j])).join("");
+    el("path",{d, fill:"none", stroke:color, "stroke-width":2, "stroke-linejoin":"round"},s);
+  });
+  // end labels, de-collided
+  const ends=ops.map((o,j)=>({o, y:Y(V[V.length-1][j])})).sort((a,b)=>a.y-b.y);
+  for(let i=1;i<ends.length;i++) if(ends[i].y-ends[i-1].y<11) ends[i].y=ends[i-1].y+11;
+  ends.forEach(e=>txt(s, X(pts[pts.length-1].t)+6, e.y+3, e.o, "val-label"));
+  // crosshair
+  const cross=el("line",{x1:0,x2:0,y1:mt,y2:mt+ih,class:"break-line",style:"display:none"},s);
+  const hit=el("rect",{x:ml,y:mt,width:iw,height:ih,class:"hit"},s);
+  hit.addEventListener("mousemove", ev=>{ const r=s.getBoundingClientRect(); const t=(ev.clientX-r.left)*(W_/r.width); const tm=(t-ml)/iw*total;
+    let p=pts[0], pi=0; pts.forEach((q,i)=>{ if(q.t<=tm){ p=q; pi=i; } }); cross.setAttribute("x1",X(p.t)); cross.setAttribute("x2",X(p.t)); cross.style.display="";
+    const ord=ops.map((o,j)=>[o,p.cum[j],V[pi][j]]).sort((a,b)=>b[1]-a[1]);
+    showTT(ev, `<div class="tt-title">${fmt(p.t/60,2)} h · block ${p.t<DATA.blocks_min[0]?1:p.t<DATA.blocks_min[0]+DATA.blocks_min[1]?2:3}</div>`+ord.map(([o,v,dv])=>row(opColor(opIdx(o)), o, fmt(v,1)+(diff?` (${dv>=0?"+":""}${fmt(dv,1)})`:""))).join("")+`<div class="tt-foot">Gap ${fmt(ord[0][1]-ord[ord.length-1][1],1)}</div>`); });
+  hit.addEventListener("mouseleave", ()=>{ cross.style.display="none"; hideTT(); });
+  legend("cumLegend", ops.map(o=>[opColor(opIdx(o)), o]));
+  // rotation table
+  const blocks=sh.blocks, final=pts[pts.length-1];
+  $("rotTable").tHead.innerHTML=`<tr><th>Operator</th>${blocks.map(b=>`<th class="nocase">Block ${b.block} · loop</th><th class="nocase">Borg</th>`).join("")}<th class="r">Exposure (end)</th><th class="r">Min/h REBA ≥ 4</th></tr>`;
+  const loopForOp=b=>Object.fromEntries(Object.entries(b.assign).map(([l,o])=>[o,+l]));
+  const heavy=b=>+Object.entries(b.forecast).sort((x,y)=>y[1]-x[1])[0][0];
+  $("rotTable").tBodies[0].innerHTML=ops.map((o,j)=>`<tr><td class="op"><span class="opdot" style="background:${opColor(opIdx(o))}"></span>${o}</td>`+
+    blocks.map((b,bi)=>{ const L=loopForOp(b)[o], hv=heavy(b)===L, borg=b.borg_after?b.borg_after[o]:null;
+      const prev=bi>0?blocks[bi-1].borg_after[o]:null, guarded = sstate.policy==="realtime" && prev!==null && prev>=DATA.borg_limit;
+      return `<td><span class="loopchip ${hv?"heavy":""}" title="forecast ${fmt(b.forecast[L],1)} exposure-min">L${L}</span>${guarded?`<span class="flag" title="Borg ≥ ${DATA.borg_limit} at the previous break: kept off the heaviest loop">Borg rule</span>`:""}</td>`+
+             `<td class="borg">${borg===null?"–":borg}${borg!==null&&borg>=DATA.borg_limit?`<span class="flag">≥${DATA.borg_limit}</span>`:""}</td>`; }).join("")+
+    `<td class="num">${fmt(final.cum[j],1)}</td><td class="num">${fmt(sh.reba4_min_h[o],1)}</td></tr>`).join("");
+  const rel=blocks.filter(b=>b.relaxed).map(b=>`block ${b.block}: ${b.relaxed==="borg_rule"?"Borg rule relaxed":"eligibility relaxed"}`);
+  $("rotNote").textContent = (sstate.policy==="static"?"No rotation: the assignment of block 1 is kept all shift. ":"") +
+    (sstate.policy==="rotation"?"Offline rotation uses the initial task values and no Borg rule. ":"") +
+    "Block 1 is any assignment that respects skills and medical restrictions. " + (rel.length?"Relaxations: "+rel.join("; ")+".":"No constraint had to be relaxed.");
+  // policy comparison
+  const pc=$("policyCompare"); pc.innerHTML="";
+  const vals=POL.map(([p])=>DATA.shifts[`${p}_${sstate.m}`].kpi.exposure_range), seeds=POL.map(([p])=>(DATA.seed_summary||[]).find(r=>r.policy===p&&r.m===sstate.m));
+  const vmax=niceMax(Math.max(...vals, ...seeds.map(x=>x?x.exposure_range_mean+x.exposure_range_std:0))*1.05);
+  {const Wc=widthOf(pc), mlc=130, mrc=150, bh=14, gap=16, mt=6, Hc=mt+POL.length*(bh+gap)+18, sv=svg(pc, Wc, Hc), iwc=Wc-mlc-mrc, Xc=v=>mlc+iwc*v/vmax;
+  ticks(vmax).forEach(v=>{ el("line",{x1:Xc(v),x2:Xc(v),y1:mt-2,y2:Hc-18,class:"grid-line"},sv); txt(sv, Xc(v), Hc-4, fmt(v,tdec(vmax)), "axis-label","middle"); });
+  POL.forEach(([p,lab],i)=>{ const y=mt+i*(bh+gap), sd=seeds[i], g=el("g",{tabindex:"0",class:"focusable"},sv);
+    txt(sv, mlc-10, y+bh/2+4, lab, "cat-label","end");
+    el("path",{d:barPath(mlc,y,Xc(vals[i])-mlc,bh,4,true), fill:p===sstate.policy?"var(--accent)":"var(--text-muted)"},g);
+    if(sd){ el("line",{x1:Xc(sd.exposure_range_mean),x2:Xc(sd.exposure_range_mean),y1:y-4,y2:y+bh+4,stroke:"var(--text-primary)","stroke-width":2},g); }
+    txt(sv, mlc+iwc+10, y+bh/2+4, fmt(vals[i],2)+(sd?"  | mean "+fmt(sd.exposure_range_mean,2):""), "val-label");
+    el("rect",{x:mlc,y:y-4,width:iwc,height:bh+8,class:"hit"},g);
+    hover(g, ()=>`<div class="tt-title">${lab} · ${sstate.m} operators</div>`+row(null,"This shift", fmt(vals[i],2)+" /h")+(sd?row(null,"10-seed mean", fmt(sd.exposure_range_mean,2)+" ± "+fmt(sd.exposure_range_std,2)):""));
+  });
+  }
+}
+chips("shiftMChips", MS.map(m=>[m,String(m)]), sstate, "m", renderShift);
+chips("policyChips", POL, sstate, "policy", renderShift);
+chips("viewChips", [["diff","Relative to mean"],["abs","Cumulative"]], sstate, "view", renderShift);
+
+function renderAll(){ renderTasks(); drawSplit(); drawTaskTable(); renderPlans(); renderShift(); }
+renderAll();
+let rt; addEventListener("resize", ()=>{ clearTimeout(rt); rt=setTimeout(()=>{ renderTasks(); drawSplit(); renderPlans(); renderShift(); }, 150); });
+})();
+</script>
+</body>
+</html>
